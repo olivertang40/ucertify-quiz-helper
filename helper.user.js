@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         ucertify-quiz-helper
-// @version      3.4.0
+// @version      3.4.1
 // @description  ucertify-quiz-helper
 // @author       guanhua
 // @include      *ucertify*
@@ -18,8 +18,8 @@
   let GEMINI_API_KEY = "MY_API_KEY";
   const GEMINI_MODEL = "gemini-3.8-flash";
   const GEMINI_TIMEOUT_MS = 30000;
-  const AI_PROVIDER = "gemini"; // "gemini" or "copilot"
-  const COPILOT_MODEL = ""; // Choose an ID from npm run models.
+  const AI_PROVIDER = "copilot"; // "gemini" or "copilot"
+  const COPILOT_MODEL = "auto"; // Choose an ID from npm run models.
   const COPILOT_BRIDGE_TOKEN = ""; // From local .copilot-bridge.json, not GitHub.
   const COPILOT_BRIDGE_URL = "http://127.0.0.1:37371/answer";
   const COPILOT_HINT_URL = COPILOT_BRIDGE_URL.replace(/\/answer$/, "/hint");

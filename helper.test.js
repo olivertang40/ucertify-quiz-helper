@@ -119,10 +119,13 @@ async function runScript({
   const configuredSource = source
     .replace('"MY_API_KEY"', JSON.stringify(apiKey))
     .replace(
-      'const AI_PROVIDER = "gemini"',
+      'const AI_PROVIDER = "copilot"',
       `const AI_PROVIDER = "${provider}"`,
     )
-    .replace('const COPILOT_MODEL = ""', 'const COPILOT_MODEL = "test-model"')
+    .replace(
+      'const COPILOT_MODEL = "auto"',
+      'const COPILOT_MODEL = "test-model"',
+    )
     .replace(
       'const COPILOT_BRIDGE_TOKEN = ""',
       'const COPILOT_BRIDGE_TOKEN = "local-token"',
