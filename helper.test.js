@@ -16,10 +16,31 @@ async function runScript({
   bridgeError = false,
   timeout = false,
   invalidJson = false,
+  beforeResponse = () => {},
 }) {
   const requests = [];
   const errors = [];
   const logs = [];
+  const page = { panel: null, position: null };
+  const questionElement = {
+    innerText: "Test question",
+    insertAdjacentElement: (position, element) => {
+      page.position = position;
+      page.panel = element;
+    },
+  };
+  const createElement = (tagName) => ({
+    tagName,
+    style: {},
+    textContent: "",
+    children: [],
+    append(...children) {
+      this.children.push(...children);
+    },
+    remove() {
+      if (page.panel === this) page.panel = null;
+    },
+  });
   const options = ["4", "3", "2", "1"].map((innerText) => ({
     innerText,
     style: {},
@@ -35,8 +56,10 @@ async function runScript({
     },
     document: {
       body: {},
-      querySelector: () => ({ innerText: "Test question" }),
+      querySelector: () => questionElement,
       querySelectorAll: () => options,
+      getElementById: (id) => (page.panel?.id === id ? page.panel : null),
+      createElement,
     },
     window: {
       addEventListener: (event, handler) => loadHandlers.push(handler),
@@ -56,10 +79,12 @@ async function runScript({
     setTimeout: (callback) => timers.push(callback),
     fetch: async (url, init) => {
       requests.push({ url, init });
+      beforeResponse(questionElement);
       return { ok: status < 400, status, json: async () => data };
     },
     GM_xmlhttpRequest: (init) => {
       requests.push({ url: init.url, init });
+      beforeResponse(questionElement);
       if (bridgeError) return init.onerror();
       if (timeout) return init.ontimeout();
       init.onload({
@@ -87,6 +112,8 @@ async function runScript({
     errors,
     logs,
     options,
+    page,
+    questionElement,
     timeouts,
     advanceTime: (milliseconds) => {
       now += milliseconds;
@@ -251,4 +278,61 @@ test("Gemini quota errors pause further requests instead of retrying immediately
   result.advanceTime(1);
   await result.runAgain();
   assert.equal(result.requests.length, 2);
+});
+
+function explanationText(panel) {
+  return panel?.children[1]?.textContent;
+}
+
+test("prompt asks for an explanation after the answer lines", async () => {
+  const { requests } = await runScript({ data: answerData() });
+  const body = JSON.parse(requests[0].init.body);
+  assert.match(body.contents[0].parts[0].text, /EXPLANATION:/);
+});
+
+test("Gemini explanation is shown below the question, not used as an answer", async () => {
+  const { options, page } = await runScript({
+    data: answerData([{ text: "4\nEXPLANATION:\nb++ prints 4 first." }]),
+  });
+  assert.equal(options[0].style.backgroundColor, "#00ff00");
+  assert.equal(page.position, "afterend");
+  assert.equal(explanationText(page.panel), "b++ prints 4 first.");
+});
+
+test("Copilot explanation is shown as plain text", async () => {
+  const { page } = await runScript({
+    provider: "copilot",
+    data: { answers: ["4"], explanation: "<b>4</b> is printed first." },
+  });
+  assert.equal(explanationText(page.panel), "<b>4</b> is printed first.");
+});
+
+test("answers without an explanation show no panel", async () => {
+  const { page } = await runScript({ data: answerData() });
+  assert.equal(page.panel, null);
+});
+
+test("the previous explanation is removed when the next question has none", async () => {
+  const quiz = {};
+  const result = await runScript({
+    data: answerData([{ text: "4\nEXPLANATION: first question." }]),
+    quiz,
+  });
+  assert.ok(result.page.panel);
+  quiz["Second question"] = ["2"];
+  result.questionElement.innerText = "Second question";
+  await result.runAgain();
+  assert.equal(result.page.panel, null);
+});
+
+test("a late answer for a previous question is not shown on the new question", async () => {
+  const { options, page, logs } = await runScript({
+    data: answerData([{ text: "4\nEXPLANATION: stale." }]),
+    beforeResponse: (questionElement) => {
+      questionElement.innerText = "A different question";
+    },
+  });
+  assert.ok(options.every((option) => !option.style.backgroundColor));
+  assert.equal(page.panel, null);
+  assert.match(logs.join("\n"), /question changed/);
 });
