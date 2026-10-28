@@ -54,6 +54,12 @@ If that port is in use, set `QUIZ_HELPER_PORT` to a free port before starting th
 
 AI answers (Gemini or Copilot) include a short explanation of why the highlighted options are correct, shown in a blue panel below the question. Database matches have no explanation. The panel is cleared when the question changes, and an answer that arrives after you've moved on is discarded. After updating, restart the bridge (`npm run bridge`) so it returns explanations.
 
+### Lab hints
+
+On Java lab pages, when **Run Code** prints `javac` errors, an orange panel in the bottom-right corner explains what each error means and which concept to review. It never writes the fix or the solution: the AI is instructed not to, and any code blocks in its reply are removed. Only the compiler output (which quotes the offending lines) is sent, not your whole program. Close the panel with `×`; it reappears only when the compiler output changes.
+
+Set `LAB_HINTS = false` in the userscript to turn this off (useful with Gemini's free-tier quota). After updating, restart the bridge (`npm run bridge`) so it serves the new `/hint` endpoint.
+
 ### tests
 
 With Node.js 22.12 or newer, run `npm ci`, then `npm test`. Tests exercise the userscript with simulated browser elements and provider responses, and the bridge over local HTTP. No credentials or live inference requests are needed.
