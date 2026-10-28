@@ -229,7 +229,8 @@ test("question text and answer choices are not written to the console", async ()
   });
   const output = [...result.logs, ...result.errors].join("\n");
   assert.equal(output.includes(result.questionElement.innerText), false);
-  for (const option of optionTexts) assert.equal(output.includes(option), false);
+  for (const option of optionTexts)
+    assert.equal(output.includes(option), false);
   assert.equal(result.options[0].style.backgroundColor, "#00ff00");
 });
 
