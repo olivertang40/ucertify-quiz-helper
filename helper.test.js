@@ -17,11 +17,13 @@ async function runScript({
   timeout = false,
   invalidJson = false,
   beforeResponse = () => {},
+  compilerOutput = "",
+  optionTexts = ["4", "3", "2", "1"],
 }) {
   const requests = [];
   const errors = [];
   const logs = [];
-  const page = { panel: null, position: null };
+  const page = { panel: null, position: null, hint: null };
   const questionElement = {
     innerText: "Test question",
     insertAdjacentElement: (position, element) => {
@@ -29,23 +31,39 @@ async function runScript({
       page.panel = element;
     },
   };
+  const output = { tagName: "DIV", innerText: compilerOutput };
+  const body = {
+    children: [output],
+    append(element) {
+      this.children.push(element);
+      page.hint = element;
+    },
+  };
   const createElement = (tagName) => ({
-    tagName,
+    tagName: tagName.toUpperCase(),
     style: {},
     textContent: "",
     children: [],
+    listeners: {},
     append(...children) {
       this.children.push(...children);
     },
+    setAttribute() {},
+    addEventListener(event, handler) {
+      this.listeners[event] = handler;
+    },
     remove() {
       if (page.panel === this) page.panel = null;
+      if (page.hint === this) page.hint = null;
+      body.children = body.children.filter((child) => child !== this);
     },
   });
-  const options = ["4", "3", "2", "1"].map((innerText) => ({
+  const options = optionTexts.map((innerText) => ({
     innerText,
     style: {},
   }));
   const loadHandlers = [];
+  const observers = [];
   const timers = [];
   const timeouts = [];
   let now = Date.now();
@@ -55,16 +73,20 @@ async function runScript({
       error: (...args) => errors.push(args.join(" ")),
     },
     document: {
-      body: {},
+      body,
       querySelector: () => questionElement,
       querySelectorAll: () => options,
-      getElementById: (id) => (page.panel?.id === id ? page.panel : null),
+      getElementById: (id) =>
+        [page.panel, page.hint].find((element) => element?.id === id) ?? null,
       createElement,
     },
     window: {
       addEventListener: (event, handler) => loadHandlers.push(handler),
     },
     MutationObserver: class {
+      constructor(callback) {
+        observers.push(callback);
+      }
       observe() {}
     },
     unsafeWindow: {},
@@ -77,14 +99,15 @@ async function runScript({
       },
     },
     setTimeout: (callback) => timers.push(callback),
+    clearTimeout: () => {},
     fetch: async (url, init) => {
       requests.push({ url, init });
-      beforeResponse(questionElement);
+      beforeResponse({ questionElement, output });
       return { ok: status < 400, status, json: async () => data };
     },
     GM_xmlhttpRequest: (init) => {
       requests.push({ url: init.url, init });
-      beforeResponse(questionElement);
+      beforeResponse({ questionElement, output });
       if (bridgeError) return init.onerror();
       if (timeout) return init.ontimeout();
       init.onload({
@@ -114,11 +137,18 @@ async function runScript({
     options,
     page,
     questionElement,
+    output,
     timeouts,
     advanceTime: (milliseconds) => {
       now += milliseconds;
     },
     runAgain: () => timers[0](),
+    // Simulates a DOM change, then runs the debounced work it scheduled.
+    mutate: async () => {
+      const scheduled = timers.length;
+      observers[0]([]);
+      for (const callback of timers.slice(scheduled)) await callback();
+    },
   };
 }
 
@@ -328,11 +358,121 @@ test("the previous explanation is removed when the next question has none", asyn
 test("a late answer for a previous question is not shown on the new question", async () => {
   const { options, page, logs } = await runScript({
     data: answerData([{ text: "4\nEXPLANATION: stale." }]),
-    beforeResponse: (questionElement) => {
+    beforeResponse: ({ questionElement }) => {
       questionElement.innerText = "A different question";
     },
   });
   assert.ok(options.every((option) => !option.style.backgroundColor));
   assert.equal(page.panel, null);
   assert.match(logs.join("\n"), /question changed/);
+});
+
+const LAB_ERRORS =
+  "user_workspace/Opr.java:7: error: ';' expected\n        int d  a % b;\n             ^\n1 error";
+// A database match keeps quiz answering from making requests in lab tests.
+const LAB = { quiz: { "Test question": ["2"] }, compilerOutput: LAB_ERRORS };
+
+function hintText(panel) {
+  return panel?.children[2]?.textContent;
+}
+
+test("lab compiler errors ask the Copilot bridge for a hint with only the compiler output", async () => {
+  const result = await runScript({
+    ...LAB,
+    provider: "copilot",
+    data: { hint: "Line 7 declares d but never assigns a value." },
+  });
+  await result.mutate();
+  assert.equal(result.requests.length, 1);
+  assert.equal(result.requests[0].url, "http://127.0.0.1:37371/hint");
+  assert.deepEqual(JSON.parse(result.requests[0].init.data), {
+    errors: LAB_ERRORS,
+    model: "test-model",
+  });
+  assert.equal(
+    hintText(result.page.hint),
+    "Line 7 declares d but never assigns a value.",
+  );
+});
+
+test("Gemini lab hints use tutor instructions and never show code blocks", async () => {
+  const result = await runScript({
+    ...LAB,
+    data: answerData([
+      { text: "Line 7 is missing an operator.\n```java\nint d = a % b;\n```" },
+    ]),
+  });
+  await result.mutate();
+  const prompt = JSON.parse(result.requests[0].init.body).contents[0].parts[0]
+    .text;
+  assert.match(prompt, /do not write corrected code/);
+  assert.match(prompt, /Opr\.java:7: error/);
+  assert.equal(hintText(result.page.hint), "Line 7 is missing an operator.");
+});
+
+test("lab pages without compiler errors make no hint request", async () => {
+  const result = await runScript({
+    ...LAB,
+    compilerOutput: "Quotient: 1\nRemainder: 3",
+    provider: "copilot",
+    data: { hint: "unused" },
+  });
+  await result.mutate();
+  assert.equal(result.requests.length, 0);
+  assert.equal(result.page.hint, null);
+});
+
+test("repeated DOM changes with the same errors request one hint", async () => {
+  const result = await runScript({
+    ...LAB,
+    provider: "copilot",
+    data: { hint: "Check line 7." },
+  });
+  await result.mutate();
+  await result.mutate();
+  assert.equal(result.requests.length, 1);
+  assert.ok(result.page.hint);
+});
+
+test("a successful run clears the hint, even if the hint quotes compiler text", async () => {
+  const result = await runScript({
+    ...LAB,
+    provider: "copilot",
+    data: { hint: "Opr.java:7: error: means a token is missing.\n1 error" },
+  });
+  await result.mutate();
+  assert.ok(result.page.hint);
+  result.output.innerText = "Quotient: 1\nRemainder: 3";
+  await result.mutate();
+  assert.equal(result.page.hint, null);
+});
+
+test("a hint for compiler output that has since changed is discarded", async () => {
+  const result = await runScript({
+    ...LAB,
+    provider: "copilot",
+    data: { hint: "stale" },
+    beforeResponse: ({ output }) => {
+      output.innerText = "Quotient: 1";
+    },
+  });
+  await result.mutate();
+  assert.equal(result.page.hint, null);
+  assert.match(result.logs.join("\n"), /compiler output changed/);
+});
+
+test("the hint panel can be closed", async () => {
+  const result = await runScript({
+    ...LAB,
+    provider: "copilot",
+    data: { hint: "Check line 7." },
+  });
+  await result.mutate();
+  result.page.hint.children[0].listeners.click();
+  assert.equal(result.page.hint, null);
+});
+
+test("question pages without answer options do not spend AI quota", async () => {
+  const { requests } = await runScript({ data: answerData(), optionTexts: [] });
+  assert.equal(requests.length, 0);
 });

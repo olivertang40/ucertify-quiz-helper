@@ -16,6 +16,7 @@ async function startBridge(
   { text = "4\n1", fail = false, models, wait } = {},
 ) {
   const sessions = [];
+  const prompts = [];
   const deleted = [];
   const logs = [];
   let markStarted;
@@ -32,7 +33,8 @@ async function startBridge(
       markStarted();
       return {
         sessionId: "test-session",
-        sendAndWait: async () => {
+        sendAndWait: async ({ prompt }) => {
+          prompts.push(prompt);
           if (wait) await wait;
           if (fail) throw new Error("SDK failure");
           return { data: { content: text } };
@@ -75,7 +77,7 @@ async function startBridge(
       request.on("error", reject);
       request.end(typeof body === "string" ? body : JSON.stringify(body));
     });
-  return { url, send, sessions, deleted, logs, started };
+  return { url, send, sessions, prompts, deleted, logs, started };
 }
 
 test("bridge returns exact answer options and deletes the session", async (t) => {
@@ -104,6 +106,58 @@ test("bridge caps very long explanations", async (t) => {
     text: `4\nEXPLANATION:\n${"x".repeat(5000)}`,
   });
   assert.equal((await (await send()).json()).explanation.length, 4000);
+});
+
+const COMPILER_OUTPUT = {
+  model: "test-model",
+  errors: "Opr.java:7: error: ';' expected\n        int d  a % b;\n1 error",
+};
+
+test("hint endpoint explains compiler errors and strips code blocks", async (t) => {
+  const { send, prompts, deleted } = await startBridge(t, {
+    text: "Line 7 declares d but never assigns it.\n```java\nint d = a % b;\n```\nCheck the assignment operator.",
+  });
+  const response = await send(COMPILER_OUTPUT, {}, "/hint");
+  assert.equal(response.status, 200);
+  const { hint } = await response.json();
+  assert.match(hint, /Line 7 declares d/);
+  assert.match(hint, /assignment operator/);
+  assert.doesNotMatch(hint, /int d = a % b/);
+  assert.deepEqual(JSON.parse(prompts[0]), {
+    compilerOutput: COMPILER_OUTPUT.errors,
+  });
+  assert.deepEqual(deleted, ["test-session"]);
+});
+
+test("hint sessions are tutor-only and as locked down as answer sessions", async (t) => {
+  const { send, sessions } = await startBridge(t, { text: "Check line 7." });
+  await send(COMPILER_OUTPUT, {}, "/hint");
+  assert.match(
+    sessions[0].systemMessage.content,
+    /do not write corrected code/,
+  );
+  assert.deepEqual(sessions[0].availableTools, []);
+  assert.equal(sessions[0].enableConfigDiscovery, false);
+});
+
+for (const [scenario, body] of [
+  ["missing errors", { model: "test-model", errors: "" }],
+  ["missing model", { errors: COMPILER_OUTPUT.errors }],
+  ["oversized errors", { ...COMPILER_OUTPUT, errors: "x".repeat(8001) }],
+]) {
+  test(`hint endpoint rejects ${scenario} without inference`, async (t) => {
+    const { send, sessions } = await startBridge(t);
+    assert.equal((await send(body, {}, "/hint")).status, 400);
+    assert.equal(sessions.length, 0);
+  });
+}
+
+test("hint that is only a code block is reported as empty", async (t) => {
+  const { send, deleted } = await startBridge(t, {
+    text: "```java\nint d = a % b;\n```",
+  });
+  assert.equal((await send(COMPILER_OUTPUT, {}, "/hint")).status, 502);
+  assert.deepEqual(deleted, ["test-session"]);
 });
 
 test("quiz sessions cannot use tools, repository config, skills, hooks, or session store", async (t) => {
