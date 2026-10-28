@@ -1,4 +1,5 @@
 # Logs
+.copilot-bridge.json
 logs
 *.log
 npm-debug.log*
