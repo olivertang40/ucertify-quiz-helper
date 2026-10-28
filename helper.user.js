@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         ucertify-quiz-helper
-// @version      3.2.0
+// @version      3.3.0
 // @description  ucertify-quiz-helper
 // @author       guanhua
 // @include      *ucertify*
@@ -25,6 +25,10 @@
   const COPILOT_TIMEOUT_MS = 60000;
   const GEMINI_COOLDOWN_MS = 60000;
   const MAX_CACHED_ANSWERS = 100;
+  const EXPLANATION_PANEL_ID = "quiz-helper-explanation";
+  const NO_AI_ANSWER = { answers: [], explanation: "" };
+  const ANSWER_FORMAT_INSTRUCTIONS = `Respond with the exact text of each correct option, one per line.
+After the answers, write a line containing only "EXPLANATION:" followed by a brief explanation (under 120 words) of why those options are correct and the others are not. For code, trace the key steps.`;
 
   let lastProcessedQuestion = null;
   let geminiRetryAfter = 0;
@@ -63,21 +67,68 @@
     });
   }
 
+  // Keep in sync with parseAIResponse in bridge.js.
+  function parseAIResponse(text) {
+    const lines = text.trim().split("\n");
+    const markerIndex = lines.findIndex((line) =>
+      /^\s*explanation\s*:/i.test(line),
+    );
+    const answerLines =
+      markerIndex === -1 ? lines : lines.slice(0, markerIndex);
+    const explanation =
+      markerIndex === -1
+        ? ""
+        : [
+            lines[markerIndex].replace(/^\s*explanation\s*:/i, ""),
+            ...lines.slice(markerIndex + 1),
+          ]
+            .join("\n")
+            .trim();
+    return {
+      answers: answerLines.map((answer) => answer.trim()).filter(Boolean),
+      explanation,
+    };
+  }
+
+  function showExplanation(questionElement, explanation) {
+    document.getElementById(EXPLANATION_PANEL_ID)?.remove();
+    if (!explanation) return;
+    const panel = document.createElement("div");
+    panel.id = EXPLANATION_PANEL_ID;
+    Object.assign(panel.style, {
+      margin: "12px 0",
+      padding: "10px 14px",
+      borderLeft: "4px solid #2f80ed",
+      backgroundColor: "#eef5ff",
+      color: "#1f2933",
+      fontSize: "14px",
+      lineHeight: "1.5",
+      whiteSpace: "pre-wrap",
+    });
+    const heading = document.createElement("strong");
+    heading.textContent = `AI explanation (${AI_PROVIDER})`;
+    const body = document.createElement("div");
+    // textContent, never innerHTML: model output must not become page markup.
+    body.textContent = explanation;
+    panel.append(heading, body);
+    // Outside the question element so its text, which detects new questions, is unchanged.
+    questionElement.insertAdjacentElement("afterend", panel);
+  }
+
   async function askGemini(question, options) {
     if (!GEMINI_API_KEY || GEMINI_API_KEY === "MY_API_KEY") {
       console.error("no Gemini API Key.");
-      return [];
+      return NO_AI_ANSWER;
     }
     if (Date.now() < geminiRetryAfter) {
       console.error("Gemini quota cooldown active. Wait before retrying.");
-      return [];
+      return NO_AI_ANSWER;
     }
 
     let API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
     let prompt = `
-      Respond exact text of the correct option(s).
-      If multiple options, list each one on a new line.
+      ${ANSWER_FORMAT_INSTRUCTIONS}
 
       Question:
       ${question}
@@ -110,7 +161,7 @@
         console.error(
           `Gemini (${GEMINI_MODEL}) HTTP ${response.status}: ${errorData.error?.message || response.statusText}`,
         );
-        return [];
+        return NO_AI_ANSWER;
       }
 
       let data = await response.json();
@@ -124,19 +175,15 @@
         console.error(
           `Gemini (${GEMINI_MODEL}) returned no answer text: ${data.promptFeedback?.blockReason || candidate?.finishReason || "empty response"}`,
         );
-        return [];
+        return NO_AI_ANSWER;
       }
 
-      return aiResponseText
-        .trim()
-        .split("\n")
-        .map((ans) => ans.trim())
-        .filter(Boolean);
+      return parseAIResponse(aiResponseText);
     } catch (error) {
       console.error(
         `Gemini (${GEMINI_MODEL}) request failed: ${error.message}`,
       );
-      return [];
+      return NO_AI_ANSWER;
     }
   }
 
@@ -145,7 +192,7 @@
       console.error(
         "Configure COPILOT_MODEL and COPILOT_BRIDGE_TOKEN first. Run npm run models for available models.",
       );
-      return Promise.resolve([]);
+      return Promise.resolve(NO_AI_ANSWER);
     }
     return new Promise((resolve) => {
       GM_xmlhttpRequest({
@@ -166,14 +213,14 @@
             console.error(
               `Copilot bridge returned invalid JSON (HTTP ${response.status}).`,
             );
-            resolve([]);
+            resolve(NO_AI_ANSWER);
             return;
           }
           if (response.status !== 200 || !Array.isArray(data?.answers)) {
             console.error(
               `Copilot bridge HTTP ${response.status}: ${data?.error || "missing answers"}`,
             );
-            resolve([]);
+            resolve(NO_AI_ANSWER);
             return;
           }
           if (
@@ -183,20 +230,24 @@
             )
           ) {
             console.error("Copilot bridge returned invalid answer options.");
-            resolve([]);
+            resolve(NO_AI_ANSWER);
             return;
           }
-          resolve(data.answers);
+          resolve({
+            answers: data.answers,
+            explanation:
+              typeof data.explanation === "string" ? data.explanation : "",
+          });
         },
         onerror: () => {
           console.error(
             "Cannot reach Copilot bridge. Start it with npm run bridge.",
           );
-          resolve([]);
+          resolve(NO_AI_ANSWER);
         },
         ontimeout: () => {
           console.error("Copilot bridge request timed out.");
-          resolve([]);
+          resolve(NO_AI_ANSWER);
         },
       });
     });
@@ -218,22 +269,22 @@
   }
 
   async function requestAI(question, options, key) {
-    let answers;
+    let result;
     if (AI_PROVIDER === "copilot") {
-      answers = await askCopilot(question, options);
+      result = await askCopilot(question, options);
     } else if (AI_PROVIDER === "gemini") {
-      answers = await askGemini(question, options);
+      result = await askGemini(question, options);
     } else {
       console.error(`Unknown AI provider: ${AI_PROVIDER}`);
-      return [];
+      return NO_AI_ANSWER;
     }
-    if (answers.length) {
+    if (result.answers.length) {
       if (aiAnswerCache.size >= MAX_CACHED_ANSWERS) {
         aiAnswerCache.delete(aiAnswerCache.keys().next().value);
       }
-      aiAnswerCache.set(key, answers);
+      aiAnswerCache.set(key, result);
     }
-    return answers;
+    return result;
   }
 
   async function runHelper() {
@@ -254,17 +305,28 @@
 
     console.log(JSON.stringify(options));
 
+    showExplanation(questionElement, "");
     let matchingKey = matchKey(currentQuestion, quiz);
 
     if (matchingKey) {
       highlightAnswers(quiz[matchingKey], optionElements);
     } else {
       console.log(`No match in DB, ask ${AI_PROVIDER}...`);
-      let aiAnswers = await askAI(currentQuestion, options);
+      let { answers, explanation } = await askAI(currentQuestion, options);
 
-      if (aiAnswers.length > 0) {
-        console.log(`${AI_PROVIDER} AI suggests:`, aiAnswers);
-        highlightAnswers(aiAnswers, optionElements);
+      let pageQuestion = document.querySelector('[data-itemtype="question"]');
+      if (
+        !pageQuestion ||
+        normalizeText(pageQuestion.innerText.trim()) !== currentQuestion
+      ) {
+        console.log("question changed before AI answered, skipping");
+        return;
+      }
+
+      if (answers.length > 0) {
+        console.log(`${AI_PROVIDER} AI suggests:`, answers);
+        highlightAnswers(answers, optionElements);
+        showExplanation(pageQuestion, explanation);
       } else {
         console.log("no answer from ai");
       }

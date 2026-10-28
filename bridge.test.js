@@ -82,8 +82,28 @@ test("bridge returns exact answer options and deletes the session", async (t) =>
   const { send, deleted } = await startBridge(t);
   const response = await send();
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { answers: ["4", "1"] });
+  assert.deepEqual(await response.json(), {
+    answers: ["4", "1"],
+    explanation: "",
+  });
   assert.deepEqual(deleted, ["test-session"]);
+});
+
+test("bridge separates the explanation from the answer options", async (t) => {
+  const { send } = await startBridge(t, {
+    text: "4\nEXPLANATION: b++ returns 4 first.\nThen the last line prints 1.",
+  });
+  assert.deepEqual(await (await send()).json(), {
+    answers: ["4"],
+    explanation: "b++ returns 4 first.\nThen the last line prints 1.",
+  });
+});
+
+test("bridge caps very long explanations", async (t) => {
+  const { send } = await startBridge(t, {
+    text: `4\nEXPLANATION:\n${"x".repeat(5000)}`,
+  });
+  assert.equal((await (await send()).json()).explanation.length, 4000);
 });
 
 test("quiz sessions cannot use tools, repository config, skills, hooks, or session store", async (t) => {
@@ -185,6 +205,7 @@ for (const [scenario, settings] of [
   ["SDK failure", { fail: true }],
   ["empty answer", { text: "" }],
   ["unmatched answer", { text: "An explanation instead of an option." }],
+  ["explanation without answers", { text: "EXPLANATION: none of them." }],
 ]) {
   test(`bridge reports ${scenario} and still deletes the session`, async (t) => {
     const { send, deleted } = await startBridge(t, settings);
