@@ -209,13 +209,39 @@ test("response text parts are combined and thought parts are excluded", async ()
   );
 });
 
-test("model rejection logs HTTP status and API explanation without highlighting", async () => {
+test("model rejection logs HTTP status without echoing provider content", async () => {
+  const providerMessage = "Private request detail: " + TEST_API_KEY;
   const { errors, options } = await runScript({
     status: 404,
-    data: { error: { message: "Model no longer available." } },
+    data: { error: { message: providerMessage } },
   });
-  assert.match(errors.join("\n"), /404.*Model no longer available/);
+  assert.match(errors.join("\n"), /HTTP 404/);
+  assert.equal(errors.join("\n").includes(providerMessage), false);
+  assert.equal(errors.join("\n").includes(TEST_API_KEY), false);
   assert.ok(options.every((option) => !option.style.backgroundColor));
+});
+
+test("question text and answer choices are not written to the console", async () => {
+  const optionTexts = ["Private choice one", "Private choice two"];
+  const result = await runScript({
+    optionTexts,
+    data: answerData([{ text: optionTexts[0] }]),
+  });
+  const output = [...result.logs, ...result.errors].join("\n");
+  assert.equal(output.includes(result.questionElement.innerText), false);
+  for (const option of optionTexts) assert.equal(output.includes(option), false);
+  assert.equal(result.options[0].style.backgroundColor, "#00ff00");
+});
+
+test("bridge error content is not written to the console", async () => {
+  const privateMessage = "Private bridge request detail";
+  const { errors } = await runScript({
+    provider: "copilot",
+    status: 502,
+    data: { error: privateMessage },
+  });
+  assert.match(errors.join("\n"), /HTTP 502/);
+  assert.equal(errors.join("\n").includes(privateMessage), false);
 });
 
 test("blocked responses give an explicit error instead of a TypeError", async () => {
@@ -259,7 +285,7 @@ for (const [scenario, settings, message] of [
   [
     "quota rejection",
     { status: 429, data: { error: "Plan limit reached." } },
-    /429.*Plan limit/,
+    /HTTP 429/,
   ],
   ["invalid answers", { data: { answers: [123] } }, /invalid answer options/],
 ]) {

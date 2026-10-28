@@ -1,5 +1,8 @@
 # Logs
 .copilot-bridge.json
+.copilot-bridge.json.*
+.quiz-answer-cache.json
+.quiz-answer-cache.json.tmp
 logs
 *.log
 npm-debug.log*

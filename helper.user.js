@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         ucertify-quiz-helper
-// @version      3.4.1
+// @version      3.4.2
 // @description  ucertify-quiz-helper
 // @author       guanhua
 // @include      *ucertify*
@@ -13,8 +13,6 @@
 (function () {
   "use strict";
 
-  // https://aistudio.google.com/app/apikey
-  // update MY_API_KEY
   let GEMINI_API_KEY = "MY_API_KEY";
   const GEMINI_MODEL = "gemini-3.8-flash";
   const GEMINI_TIMEOUT_MS = 30000;
@@ -73,7 +71,6 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
         let text = normalizeText(element.innerText.trim());
         if (text === value) {
           element.style.backgroundColor = "#00ff00";
-          console.log("Highlighting answer:", value);
         }
       }
     });
@@ -160,9 +157,8 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
         if (response.status === 429) {
           geminiRetryAfter = Date.now() + GEMINI_COOLDOWN_MS;
         }
-        let errorData = await response.json();
         console.error(
-          `Gemini (${GEMINI_MODEL}) HTTP ${response.status}: ${errorData.error?.message || response.statusText}`,
+          `Gemini (${GEMINI_MODEL}) HTTP ${response.status}. Check model access, API configuration, and quota.`,
         );
         return null;
       }
@@ -183,7 +179,7 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
       return aiResponseText;
     } catch (error) {
       console.error(
-        `Gemini (${GEMINI_MODEL}) request failed: ${error.message}`,
+        `Gemini (${GEMINI_MODEL}) request failed. Check connectivity and API configuration.`,
       );
       return null;
     }
@@ -236,7 +232,7 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
           }
           if (response.status !== 200) {
             console.error(
-              `Copilot bridge HTTP ${response.status}: ${data?.error || "request failed"}`,
+              `Copilot bridge HTTP ${response.status}. Check bridge configuration, model access, and quota.`,
             );
             resolve(null);
             return;
@@ -435,7 +431,6 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
     }
 
     let currentQuestion = normalizeText(questionElement.innerText.trim());
-    console.log(JSON.stringify(currentQuestion));
 
     lastProcessedQuestion = currentQuestion;
 
@@ -444,7 +439,6 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
       normalizeText(el.innerText.trim()),
     );
 
-    console.log(JSON.stringify(options));
     // Lab activities have no answer options; asking would only spend quota.
     if (options.length === 0) return;
 
@@ -467,7 +461,6 @@ After the answers, write a line containing only "EXPLANATION:" followed by a bri
       }
 
       if (answers.length > 0) {
-        console.log(`${AI_PROVIDER} AI suggests:`, answers);
         highlightAnswers(answers, optionElements);
         showExplanation(pageQuestion, explanation);
       } else {
