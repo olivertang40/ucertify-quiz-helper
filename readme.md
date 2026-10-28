@@ -34,7 +34,7 @@ GitHub Copilot is not a browser API that accepts a GitHub auth code. This script
 2. In this repository, run `npm ci`, then `npm run bridge`. Keep that terminal running while you use the script.
 3. In another terminal, run `npm run models`. This lists the models enabled for your signed-in account and their billing multipliers when reported by Copilot. Choose an exact model ID from that list. A lower multiplier is cheaper relative to the base rate; it is not a promise of unlimited or free usage. Model access and quotas depend on your plan and organization policy.
 4. Open the generated local [.copilot-bridge.json](./.copilot-bridge.json) and copy its `token` value into `COPILOT_BRIDGE_TOKEN` in your Tampermonkey copy of [helper.user.js](./helper.user.js). This is a separate, local bridge secret, not a GitHub credential. The generated file is ignored by Git; do not share or commit it.
-5. Set `AI_PROVIDER = "copilot"` and set `COPILOT_MODEL` to your chosen ID. Save the script, accept Tampermonkey's permission to connect to `127.0.0.1`, and reload the quiz tab. Install the complete updated script so its new `@grant` and `@connect` metadata are included.
+5. The script defaults to `AI_PROVIDER = "copilot"` and `COPILOT_MODEL = "auto"`, which lets Copilot pick an available model. Replace `"auto"` with an exact ID if you prefer a specific model. Leaving `COPILOT_MODEL` blank disables Copilot requests. Save the script, accept Tampermonkey's permission to connect to `127.0.0.1`, and reload the quiz tab. Install the complete updated script so its new `@grant` and `@connect` metadata are included.
 
 If model discovery reports no enabled models, run `copilot login` locally and check your Copilot subscription and organization policy, then restart the bridge. A successful GitHub CLI sign-in alone does not establish that Copilot inference or a particular model is available. The bridge will not invent model IDs or silently choose a billed model.
 
@@ -44,7 +44,7 @@ If that port is in use, set `QUIZ_HELPER_PORT` to a free port before starting th
 
 ### Quotas and provider selection
 
-- Gemini remains the default for existing users. Set `AI_PROVIDER` to `"gemini"` or `"copilot"` explicitly; failures never silently switch providers or spend another provider's quota.
+- Copilot is the default provider. Set `AI_PROVIDER = "gemini"` to use Gemini instead; failures never silently switch providers or spend another provider's quota.
 - The database is checked first. Successful AI answers are cached in memory for up to 100 question/option combinations until the page reloads, and duplicate concurrent requests for the same question are suppressed.
 - Gemini HTTP 429 responses trigger a 60-second cooldown without automatic retries. If the daily free-tier quota is exhausted, wait for the provider's quota reset or manually switch to Copilot. This does not bypass billing or rate limits.
 - Copilot requests use your subscription's applicable allowances. There is no assumption that a model visible in VS Code is also enabled for the CLI; use `npm run models` to check.
